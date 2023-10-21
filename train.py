@@ -558,35 +558,19 @@ def main(
             
                 prompts = validation_data.prompts[:2] if global_step < 1000 and (not image_finetune) else validation_data.prompts
                 first_frame = pixel_values[:, 0, :, :, :]
-                first_frame_repeated = first_frame.unsqueeze(1).repeat(1, video_length, 1, 1, 1)
 
-                # Mask values so everything is masked
-                masks = torch.ones_like(pixel_values[:, :, 0:1, :, :])
-                #inverted_mask = 1 - masks
             
                 # Convert videos to latent space
                 with torch.no_grad():
-                    masked_pixel_values = first_frame_repeated
+          
 
-            
-                    if not image_finetune:
-                        pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
-                        masked_pixel_values = rearrange(masked_pixel_values, "b f c h w -> (b f) c h w")
-            
-                        masked_latents = vae.encode(masked_pixel_values).latent_dist
-                        masked_latents = masked_latents.sample()
-                        masked_latents = rearrange(masked_latents, "(b f) c h w -> b c f h w", f=video_length)
-            
-                        latents = vae.encode(pixel_values).latent_dist
-                        latents = latents.sample()
-                        latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
-                    else:
-                        latents = vae.encode(pixel_values).latent_dist
-                        latents = latents.sample()
-            
-                        # For image_finetune, we'll also need to generate masked_latents
-                        masked_latents = vae.encode(masked_pixel_values).latent_dist
-                        masked_latents = masked_latents.sample()
+                    pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
+        
+
+                    latents = vae.encode(pixel_values).latent_dist
+                    latents = latents.sample()
+                    latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
+
             
                     latents = latents * 0.18215
             
@@ -596,9 +580,7 @@ def main(
                     video_length=train_data.sample_n_frames,
                     height=height,
                     width=width,
-                    latents=latents,
-                    masks=masks,
-                    masked_latents=masked_latents,  # Pass the masked_latents to the validation pipeline
+                    init_image=first_frame,
                     **validation_data,
                 ).videos
 

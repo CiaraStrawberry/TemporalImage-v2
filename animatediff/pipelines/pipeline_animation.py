@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from diffusers.utils import is_accelerate_available
 from packaging import version
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModel
 
 from diffusers.configuration_utils import FrozenDict
 from diffusers.models import AutoencoderKL
@@ -48,6 +48,7 @@ class AnimationPipeline(DiffusionPipeline):
         text_encoder: CLIPTextModel,
         tokenizer: CLIPTokenizer,
         unet: UNet3DConditionModel,
+        vision_encoder: CLIPVisionModel,
         scheduler: Union[
             DDIMScheduler,
             PNDMScheduler,
@@ -58,7 +59,7 @@ class AnimationPipeline(DiffusionPipeline):
         ],
     ):
         super().__init__()
-
+        self.vision_encoder = vision_encoder
         if hasattr(scheduler.config, "steps_offset") and scheduler.config.steps_offset != 1:
             deprecation_message = (
                 f"The configuration file of this scheduler: {scheduler} is outdated. `steps_offset`"
@@ -237,6 +238,12 @@ class AnimationPipeline(DiffusionPipeline):
 
         return text_embeddings
 
+    def encode_images(self, image):
+        #image = (image * 2 - 1).clamp(-1, 1)
+        image = image.to(self._execution_device)
+        image = self.vision_encoder(image).pooler_output  
+        return image
+
     def decode_latents(self, latents):
         video_length = latents.shape[2]
         latents = 1 / 0.18215 * latents
@@ -283,46 +290,7 @@ class AnimationPipeline(DiffusionPipeline):
                 f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
                 f" {type(callback_steps)}."
             )
-    def prepare_mask_latents(
-        self, mask, masked_video_latents, batch_size, height, width, dtype, device, generator, do_classifier_free_guidance
-    ):
-        original_shape = mask.shape
-        # Resize the mask to latents shape as we concatenate the mask to the latents
-        if len(original_shape) == 5:
-            # Reshape the tensor into 4D by merging the first two dimensions
-            mask = mask.view(-1, original_shape[2], original_shape[3], original_shape[4])
-    
-        mask = torch.nn.functional.interpolate(
-            mask, size=(height // self.vae_scale_factor, width // self.vae_scale_factor)
-        )
-    
-        mask = mask.to(device=device, dtype=dtype)
-        
-        if len(original_shape) == 5:
-            # Reshape the tensor back to 5D
-            mask = mask.view(original_shape[0], original_shape[1], mask.shape[1], mask.shape[2], mask.shape[3])
-        print(f"original shape {original_shape} and new mask {mask.shape}")
-        #mask = mask.unsqueeze(0)
-        mask = mask.permute(0, 2, 1, 3, 4)
-        mask = mask.cuda()
-        # Duplicate mask and masked_video_latents for each generation per prompt
-        if mask.shape[0] < batch_size:
-            if not batch_size % mask.shape[0] == 0:
-                raise ValueError("...")
-            mask = mask.repeat(batch_size // mask.shape[0], 1, 1, 1, 1)  # Added an extra dimension for video length
-        if masked_video_latents.shape[0] < batch_size:
-            if not batch_size % masked_video_latents.shape[0] == 0:
-                raise ValueError("...")
-            masked_video_latents = masked_video_latents.repeat(batch_size // masked_video_latents.shape[0], 1, 1, 1, 1)  # Added an extra dimension for video length
-    
-        mask = torch.cat([mask] * 2) if do_classifier_free_guidance else mask
-        masked_video_latents = (
-            torch.cat([masked_video_latents] * 2) if do_classifier_free_guidance else masked_video_latents
-        )
-    
-        # Aligning device
-        masked_video_latents = masked_video_latents.to(device=device, dtype=dtype)
-        return mask, masked_video_latents
+
 
     #cant import for some stupid reason
     def randn_tensor(
@@ -407,12 +375,10 @@ class AnimationPipeline(DiffusionPipeline):
         num_videos_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
-        masked_latents: Optional[torch.FloatTensor] = None,
+        init_image: Optional[torch.FloatTensor] = None,
         output_type: Optional[str] = "tensor",
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-        masks: torch.Tensor= None,
         callback_steps: Optional[int] = 1,
         **kwargs,
     ):
@@ -448,18 +414,7 @@ class AnimationPipeline(DiffusionPipeline):
         print (f"initial text shape {text_embeddings.shape} nd class {do_classifier_free_guidance}")
 
     
-        #print(masked_latents.shape)
-        mask, masked_latents_input = self.prepare_mask_latents(
-            masks,
-            masked_latents,  
-            batch_size,
-            height,
-            width,
-            text_embeddings.dtype,  # Assuming you want to use the same dtype as text_embeddings
-            device,
-            generator,
-            do_classifier_free_guidance=do_classifier_free_guidance
-        )
+
         
         # Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -482,26 +437,18 @@ class AnimationPipeline(DiffusionPipeline):
 
         # Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
+        image_encoder_hidden_states = self.encode_images(init_image)
         # Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
-                
-                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                # Concatenate latents, masks, and masked latents based on U-Net's expected input channels
-                #if num_channels_unet == 9:
-                
-                #print (f"latent {latent_model_input.shape} mask {mask.shape} masked {masked_latents_input.shape}")
-                latent_model_input = torch.cat([latent_model_input, mask, masked_latents_input], dim=1)
-              
+               
                 # predict the noise residual
                # print (f"pipe latent model input {latent_model_input.shape} and classifier guide {do_classifier_free_guidance}")
                # print(f"text embeddings pipe shape {text_embeddings.shape}")
-                noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample.to(dtype=latents_dtype)
+                noise_pred = self.unet(latents, t, encoder_hidden_states=text_embeddings,image_encoder_hidden_states=image_encoder_hidden_states).sample.to(dtype=latents_dtype)
 
                 # perform guidance
                 if do_classifier_free_guidance:
