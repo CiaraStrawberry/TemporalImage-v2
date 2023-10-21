@@ -442,8 +442,6 @@ def main(
                         pixel_value = pixel_value / 2. + 0.5
                         torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check_input/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
             
-            with torch.no_grad():
-                first_frame_encodings = vision_encoder(first_frame).pooler_output  # Modify as necessary based on the output format
 
 
 
@@ -468,6 +466,9 @@ def main(
 
             # Add noise to the latents according to the noise magnitude at each timestep
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+
+            with torch.no_grad():
+                first_frame_encodings = vision_encoder(first_frame).pooler_output  # Modify as necessary based on the output format
 
             # Get the text embedding for conditioning
             with torch.no_grad():
