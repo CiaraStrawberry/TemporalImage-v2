@@ -33,7 +33,7 @@ from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
 
 import transformers
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer,CLIPVisionModel
 
 from animatediff.data.dataset import WebVid10M
 from animatediff.models.unet import UNet3DConditionModel
@@ -180,9 +180,8 @@ def main(
     print(pretrained_model_path)
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
-    vae_Dir = "/home/holo/workspace/AnimateDiff-512/models/stable-diffusion-normal"
     
-    vae          = AutoencoderKL.from_pretrained(vae_Dir, subfolder="vae")
+    vae          = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
     #vae = AutoencoderKL
     tokenizer    = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
@@ -190,37 +189,39 @@ def main(
         pretrained_model_path, subfolder="unet", 
         unet_additional_kwargs=OmegaConf.to_container(unet_additional_kwargs)
     )
+    vision_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
 
 
         
-    missing_keys_initial, _ = unet.load_state_dict(unet.state_dict(), strict=False)
-    loaded__checkpoint_params_names = ""
+    #missing_keys_initial, _ = unet.load_state_dict(unet.state_dict(), strict=False)
+    #loaded__checkpoint_params_names = ""
     # Load pretrained unet weights
 
     print(f"from checkpoint: {unet_checkpoint_path}")
-    checkpoint = torch.load(unet_checkpoint_path, map_location="cpu")
+    if unet_checkpoint_path == "":
+        checkpoint = torch.load(unet_checkpoint_path, map_location="cpu")
 
-    if "global_step" in checkpoint:
-        zero_rank_print(f"global_step: {checkpoint['global_step']}")
+        if "global_step" in checkpoint:
+            zero_rank_print(f"global_step: {checkpoint['global_step']}")
 
-    loaded_state_dict = checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
+        loaded_state_dict = checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
 
-    # Check for "module." prefix and remove
-    new_loaded_state_dict = {key.replace("module.", "") if key.startswith("module.") else key: value 
-                             for key, value in loaded_state_dict.items()}
+        # Check for "module." prefix and remove
+        new_loaded_state_dict = {key.replace("module.", "") if key.startswith("module.") else key: value 
+                                for key, value in loaded_state_dict.items()}
 
-    current_model_dict = unet.state_dict()
+        current_model_dict = unet.state_dict()
 
-    
-    loaded__checkpoint_params_names = set(loaded_state_dict.keys())
+        
+        loaded__checkpoint_params_names = set(loaded_state_dict.keys())
 
-    
-    new_state_dict = {k: v if v.size() == current_model_dict[k].size() else current_model_dict[k]
-                      for k, v in zip(current_model_dict.keys(), new_loaded_state_dict.values())}
+        
+        new_state_dict = {k: v if v.size() == current_model_dict[k].size() else current_model_dict[k]
+                        for k, v in zip(current_model_dict.keys(), new_loaded_state_dict.values())}
 
-    missing_after_load, unexpected = unet.load_state_dict(new_state_dict, strict=False)
-    print(f"missing keys after loading checkpoint: {len(missing_after_load)}, unexpected keys: {len(unexpected)}")
-    assert len(unexpected) == 0
+        missing_after_load, unexpected = unet.load_state_dict(new_state_dict, strict=False)
+        print(f"missing keys after loading checkpoint: {len(missing_after_load)}, unexpected keys: {len(unexpected)}")
+        assert len(unexpected) == 0
 
    # if set(missing_after_load).issubset(set(missing_keys_initial)):
     #    print("All initially missing keys were filled by the checkpoint!")
@@ -233,11 +234,11 @@ def main(
 
 
 
-    sd_override_path = "/home/holo/workspace/AnimateDiff-512/diffusion_pytorch_model.bin"
-    override_checkpoint = torch.load(sd_override_path, map_location="cpu")    
-    override_state_dict = override_checkpoint
-    missing_after_load, unexpected = unet.load_state_dict(override_state_dict, strict=False)
-    print(f"override missing keys after loading checkpoint: {len(missing_after_load)}, unexpected keys: {len(unexpected)}")
+    #sd_override_path = "/home/holo/workspace/AnimateDiff-512/diffusion_pytorch_model.bin"
+    #override_checkpoint = torch.load(sd_override_path, map_location="cpu")    
+    #override_state_dict = override_checkpoint
+    #missing_after_load, unexpected = unet.load_state_dict(override_state_dict, strict=False)
+    #print(f"override missing keys after loading checkpoint: {len(missing_after_load)}, unexpected keys: {len(unexpected)}")
 
 
     
@@ -247,6 +248,7 @@ def main(
             
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
+
     text_encoder.requires_grad_(False)
     #tokenizer.requires_grad_(False)
     # Set unet trainable parameters
@@ -256,7 +258,7 @@ def main(
             if trainable_module_name in name:
                 param.requires_grad = True
                 break
-
+    vision_encoder.requires_grad_(False)
                 
         
     trainable_params = list(filter(lambda p: p.requires_grad, unet.parameters()))
@@ -441,21 +443,18 @@ def main(
                         torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check_input/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
             
             with torch.no_grad():
+                first_frame_encodings = vision_encoder(first_frame).pooler_output  # Modify as necessary based on the output format
+
+
+
+            with torch.no_grad():
                 pixel_values = rearrange(pixel_values, "b c f h w -> b f c h w")
                 pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
                 
-                # Encode the masked_pixel_values to get masked_latents
-                masked_pixel_values = rearrange(masked_pixel_values, "b c f h w -> b f c h w")
-                masked_pixel_values = rearrange(masked_pixel_values, "b f c h w -> (b f) c h w")
-
-                masked_latents = vae.encode(masked_pixel_values).latent_dist
-                masked_latents = masked_latents.sample()
-                masked_latents = rearrange(masked_latents, "(b f) c h w -> b c f h w", f=video_length)
 
                 latents = vae.encode(pixel_values).latent_dist
                 latents = latents.sample().cuda()
                 latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
-
 
                 latents = latents * 0.18215
 
@@ -482,22 +481,9 @@ def main(
             latents_shape = latents.shape[-3:]  # (Depth/Length, Height, Width)
             mask = torch.ones((bsz, 1) + latents_shape, device=latents.device)
 
-         
-            #mask = F.interpolate(single_channel_mask, size=latents_shape, mode='nearest')
-            #print(f"mask after interp {mask.shape}")
             mask = mask.cuda()
 
-            # For the inpainting pipeline, we'll use the masked_latents as input
-            #latent_model_input = torch.cat([latents] * 2)  # Assuming do_classifier_free_guidance is True for simplicity
-            #latent_model_input = self.scheduler.scale_model_input(latent_model_input, timesteps)
-            #if num_channels_unet == 9:
-            latent_model_input = torch.cat([noisy_latents, mask, masked_latents], dim=1)
 
-
-            # Predict the noise residual using the inpainting model
-            #print(f"noise shape {noisy_latents.shape} mask shape {mask.shape} masked_latents {masked_latents.shape}")
-            #print(f"latent shape {latent_model_input.shape}")
-            #print(f"text embeddings train  shape {encoder_hidden_states.shape}")
             
 
             # Get the target for loss depending on the prediction type
@@ -508,7 +494,7 @@ def main(
 
                 
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                noise_pred = unet(latent_model_input, timesteps, encoder_hidden_states).sample
+                noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states=encoder_hidden_states,image_encoder_hidden_states=first_frame_encodings).sample
                 loss = F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
 

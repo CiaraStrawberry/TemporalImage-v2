@@ -13,7 +13,7 @@ unet_additional_kwargs:
   motion_module_kwargs:
     num_attention_heads                : 8
     num_transformer_block              : 1
-    attention_block_types              : [ "Temporal_Self", "Temporal_Self" ]
+    attention_block_types              : [ "Temporal_Self", "Temporal_Self","Temporal_Cross" ]
     temporal_position_encoding         : true
     temporal_position_encoding_max_len : 24
     temporal_attention_dim_div         : 1
@@ -46,10 +46,10 @@ validation_data:
 trainable_modules:
   - "motion_modules."
 
-unet_checkpoint_path: "/workspace/AnimateDiff-512/models/Motion_module/mm_sd_v15.ckpt"
+unet_checkpoint_path: "/workspace/AnimateDiff-512/models/Motion_module/mm_sd_v14.ckpt"
 
-learning_rate:    1.e-4
-train_batch_size: 1
+learning_rate:    2.e-6
+train_batch_size: 18
 
 max_train_epoch:      -1
 max_train_steps:      1000

@@ -183,6 +183,7 @@ class TemporalTransformerBlock(nn.Module):
         norms = []
         
         for block_name in attention_block_types:
+            print("initialising bock: ", block_name)
             attention_blocks.append(
                 VersatileAttention(
                     attention_mode=block_name.split("_")[0],
@@ -209,12 +210,12 @@ class TemporalTransformerBlock(nn.Module):
         self.ff_norm = nn.LayerNorm(dim)
 
 
-    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None, video_length=None):
+    def forward(self, hidden_states, encoder_hidden_states=None,image_encoder_hidden_states=None, attention_mask=None, video_length=None):
         for attention_block, norm in zip(self.attention_blocks, self.norms):
             norm_hidden_states = norm(hidden_states)
             hidden_states = attention_block(
                 norm_hidden_states,
-                encoder_hidden_states=encoder_hidden_states if attention_block.is_cross_attention else None,
+                encoder_hidden_states=image_encoder_hidden_states if attention_block.is_cross_attention else None,
                 video_length=video_length,
             ) + hidden_states
             

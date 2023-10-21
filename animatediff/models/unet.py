@@ -323,6 +323,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         sample: torch.FloatTensor,
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
+        image_encoder_hidden_states: torch.Tensor = None,
         class_labels: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
@@ -408,16 +409,17 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
+                    image_encoder_hidden_states=image_encoder_hidden_states,
                     attention_mask=attention_mask,
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, encoder_hidden_states=encoder_hidden_states)
+                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, encoder_hidden_states=encoder_hidden_states,image_encoder_hidden_states=image_encoder_hidden_states)
 
             down_block_res_samples += res_samples
 
         # mid
         sample = self.mid_block(
-            sample, emb, encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
+            sample, emb, encoder_hidden_states=encoder_hidden_states,image_encoder_hidden_states=image_encoder_hidden_states, attention_mask=attention_mask
         )
 
         # up
@@ -438,12 +440,13 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
                     encoder_hidden_states=encoder_hidden_states,
+                    image_encoder_hidden_states=image_encoder_hidden_states,
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
                 )
             else:
                 sample = upsample_block(
-                    hidden_states=sample, temb=emb, res_hidden_states_tuple=res_samples, upsample_size=upsample_size, encoder_hidden_states=encoder_hidden_states,
+                    hidden_states=sample, temb=emb, res_hidden_states_tuple=res_samples, upsample_size=upsample_size, encoder_hidden_states=encoder_hidden_states,image_encoder_hidden_states=image_encoder_hidden_states,
                 )
 
         # post-process
