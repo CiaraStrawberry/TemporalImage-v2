@@ -183,7 +183,7 @@ class TemporalTransformerBlock(nn.Module):
         norms = []
         
         for block_name in attention_block_types:
-            print("initialising bock: ", block_name)
+           # print("initialising bock: ", block_name)
             attention_blocks.append(
                 VersatileAttention(
                     attention_mode=block_name.split("_")[0],

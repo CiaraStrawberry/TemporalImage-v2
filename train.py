@@ -101,7 +101,7 @@ def main(
     
     output_dir: str,
     pretrained_model_path: str,
-
+    pretrained_override_path: str,
     train_data: Dict,
     validation_data: Dict,
     cfg_random_null_text: bool = True,
@@ -198,7 +198,7 @@ def main(
     # Load pretrained unet weights
 
     print(f"from checkpoint: {unet_checkpoint_path}")
-    if unet_checkpoint_path == "":
+    if unet_checkpoint_path != "":
         checkpoint = torch.load(unet_checkpoint_path, map_location="cpu")
 
         if "global_step" in checkpoint:
@@ -235,16 +235,18 @@ def main(
 
 
     #sd_override_path = "/home/holo/workspace/AnimateDiff-512/diffusion_pytorch_model.bin"
-    #override_checkpoint = torch.load(sd_override_path, map_location="cpu")    
-    #override_state_dict = override_checkpoint
-    #missing_after_load, unexpected = unet.load_state_dict(override_state_dict, strict=False)
-    #print(f"override missing keys after loading checkpoint: {len(missing_after_load)}, unexpected keys: {len(unexpected)}")
-
-
     
+    
+    override_checkpoint = torch.load(pretrained_override_path, map_location="cpu")    
+    override_state_dict = override_checkpoint
+    missing_after_load, unexpected = unet.load_state_dict(override_state_dict, strict=False)
+    print(f"override missing keys after loading checkpoint: {len(missing_after_load)}, unexpected keys: {len(unexpected)}")
+
+
+
     # If the checkpoint has an epoch state, you can also retrieve it
-    if "epoch" in checkpoint:
-        epoch = checkpoint["epoch"]
+    #if "epoch" in checkpoint:
+    #    epoch = checkpoint["epoch"]
             
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -273,16 +275,17 @@ def main(
         eps=adam_epsilon,
     )
 
-    if "optimizer_state_dict" in checkpoint:
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"newlr = {learning_rate}")
-        for g in optimizer.param_groups:
-            g['lr'] = learning_rate
-        for state in optimizer.state.values():
-            for k, v in state.items():
-                if isinstance(v, torch.Tensor):
-                  state[k] = v.to(device)
+    if unet_checkpoint_path!= "":
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print(f"newlr = {learning_rate}")
+            for g in optimizer.param_groups:
+                g['lr'] = learning_rate
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                      state[k] = v.to(device)
 
 
     if is_main_process:
