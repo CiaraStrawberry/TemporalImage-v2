@@ -442,12 +442,7 @@ class AnimationPipeline(DiffusionPipeline):
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # expand the latents if we are doing classifier free guidance
 
-               
-                # predict the noise residual
-               # print (f"pipe latent model input {latent_model_input.shape} and classifier guide {do_classifier_free_guidance}")
-               # print(f"text embeddings pipe shape {text_embeddings.shape}")
                 noise_pred = self.unet(latents, t, encoder_hidden_states=text_embeddings,image_encoder_hidden_states=image_encoder_hidden_states).sample.to(dtype=latents_dtype)
 
                 # perform guidance

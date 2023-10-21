@@ -431,20 +431,14 @@ def main(
             masked_pixel_values = first_frame.unsqueeze(2).expand(-1, -1, frames, -1, -1)
 
             if epoch == first_epoch and step == 0:
-                
                 masked_pixel_values_print = masked_pixel_values.clone().cpu()
-                if not image_finetune:
-                    for idx, (pixel_value, text) in enumerate(zip(masked_pixel_values_print, texts)):
-                        pixel_value = pixel_value[None, ...]
-                        save_videos_grid(pixel_value, f"{output_dir}/sanity_check_input/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif", rescale=True)
-                else:
-                    for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
-                        pixel_value = pixel_value / 2. + 0.5
-                        torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check_input/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
+                for idx, (pixel_value, text) in enumerate(zip(masked_pixel_values_print, texts)):
+                    pixel_value = pixel_value[None, ...]
+                    save_videos_grid(pixel_value, f"{output_dir}/sanity_check_input/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif", rescale=True)
             
 
 
-
+            first_frame_denormalized = first_frame / 2. + 0.5
             with torch.no_grad():
                 pixel_values = rearrange(pixel_values, "b c f h w -> b f c h w")
                 pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
@@ -468,7 +462,7 @@ def main(
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
             with torch.no_grad():
-                first_frame_encodings = vision_encoder(first_frame).pooler_output  # Modify as necessary based on the output format
+                first_frame_encodings = vision_encoder(first_frame_denormalized).pooler_output  # Modify as necessary based on the output format
 
             # Get the text embedding for conditioning
             with torch.no_grad():
@@ -549,7 +543,7 @@ def main(
                 # Ensure every frame is the first frame
                 first_frame = pixel_values[:, 0:1, :, :, :]
                 pixel_values = first_frame.repeat(1, video_length, 1, 1, 1)
-            
+
                 generator = torch.Generator(device=latents.device)
                 generator.manual_seed(global_seed)
             
@@ -558,7 +552,7 @@ def main(
             
                 prompts = validation_data.prompts[:2] if global_step < 1000 and (not image_finetune) else validation_data.prompts
                 first_frame = pixel_values[:, 0, :, :, :]
-
+                first_frame = first_frame / 2. + 0.5
             
                 # Convert videos to latent space
                 with torch.no_grad():
