@@ -11,6 +11,7 @@ from tqdm import tqdm
 from diffusers.utils import is_accelerate_available
 from packaging import version
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModel
+import torch.nn.functional as F
 
 from diffusers.configuration_utils import FrozenDict
 from diffusers.models import AutoencoderKL
@@ -238,11 +239,14 @@ class AnimationPipeline(DiffusionPipeline):
 
         return text_embeddings
 
-    def encode_images(self, image):
+    def encode_images(self,device, image):
         #image = (image * 2 - 1).clamp(-1, 1)
-        image = image.to(self._execution_device)
-        image = self.vision_encoder(image).pooler_output  
-        return image
+        image = image.to(device)
+        resized_encodings = F.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
+        resized_encodings = resized_encodings.to(device)
+        encodings = self.vision_encoder(resized_encodings).last_hidden_state  
+        encodings = torch.cat([encodings, encodings])
+        return encodings
 
     def decode_latents(self, latents):
         video_length = latents.shape[2]
@@ -392,10 +396,10 @@ class AnimationPipeline(DiffusionPipeline):
         # Define call parameters
         # batch_size = 1 if isinstance(prompt, str) else len(prompt)
         batch_size = 1
-        if latents is not None:
-            batch_size = latents.shape[0]
+        
         if isinstance(prompt, list):
             batch_size = len(prompt)
+            print("batch size is ", batch_size)
         
         device = self._execution_device
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
@@ -411,7 +415,7 @@ class AnimationPipeline(DiffusionPipeline):
         text_embeddings = self._encode_prompt(
             prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt
         )
-        print (f"initial text shape {text_embeddings.shape} nd class {do_classifier_free_guidance}")
+        
 
     
 
@@ -437,13 +441,18 @@ class AnimationPipeline(DiffusionPipeline):
 
         # Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-        image_encoder_hidden_states = self.encode_images(init_image)
+        image_encoder_hidden_states = self.encode_images(device,init_image)
+
+        print (f"initial text shape {text_embeddings.shape} initial image shape {image_encoder_hidden_states.shape} and eencoder = {image_encoder_hidden_states.shape}")
         # Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
+                
+                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                noise_pred = self.unet(latents, t, encoder_hidden_states=text_embeddings,image_encoder_hidden_states=image_encoder_hidden_states).sample.to(dtype=latents_dtype)
+                noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings,image_encoder_hidden_states=image_encoder_hidden_states).sample.to(dtype=latents_dtype)
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -453,11 +462,11 @@ class AnimationPipeline(DiffusionPipeline):
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
 
-            # call the callback, if provided
-            if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                progress_bar.update()
-                if callback is not None and i % callback_steps == 0:
-                    callback(i, t, latents)
+                # call the callback, if provided
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                    progress_bar.update()
+                    if callback is not None and i % callback_steps == 0:
+                        callback(i, t, latents)
 
         # Post-processing
         video = self.decode_latents(latents)

@@ -210,12 +210,13 @@ class TemporalTransformerBlock(nn.Module):
         self.ff_norm = nn.LayerNorm(dim)
 
 
-    def forward(self, hidden_states, encoder_hidden_states=None,image_encoder_hidden_states=None, attention_mask=None, video_length=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None, video_length=None):
+        
         for attention_block, norm in zip(self.attention_blocks, self.norms):
             norm_hidden_states = norm(hidden_states)
             hidden_states = attention_block(
                 norm_hidden_states,
-                encoder_hidden_states=image_encoder_hidden_states if attention_block.is_cross_attention else None,
+                encoder_hidden_states=encoder_hidden_states if attention_block.is_cross_attention else None,
                 video_length=video_length,
             ) + hidden_states
             
@@ -279,11 +280,13 @@ class VersatileAttention(CrossAttention):
             
             if self.pos_encoder is not None:
                 hidden_states = self.pos_encoder(hidden_states)
-            
+            if encoder_hidden_states is not None:
+                print(f"encoder hidden shapes  {encoder_hidden_states.shape}")
+
             encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b d) n c", d=d) if encoder_hidden_states is not None else encoder_hidden_states
         else:
             raise NotImplementedError
-
+      
         encoder_hidden_states = encoder_hidden_states
 
         if self.group_norm is not None:
@@ -297,6 +300,7 @@ class VersatileAttention(CrossAttention):
             raise NotImplementedError
 
         encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
+        
         key = self.to_k(encoder_hidden_states)
         value = self.to_v(encoder_hidden_states)
 

@@ -12,7 +12,6 @@ unet_additional_kwargs:
   motion_module_type: Vanilla
   motion_module_kwargs:
     num_attention_heads: 8
-    cross_attention_dim: 768
     num_transformer_block: 1
     attention_block_types:
     - Temporal_Self

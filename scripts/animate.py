@@ -10,7 +10,7 @@ import diffusers
 from diffusers import AutoencoderKL, DDIMScheduler
 
 from tqdm.auto import tqdm
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer,CLIPVisionModel
 
 from animatediff.models.unet import UNet3DConditionModel
 from animatediff.pipelines.pipeline_animation import AnimationPipeline
@@ -102,14 +102,15 @@ def main(args):
             ### >>> create validation pipeline >>> ###
             tokenizer    = CLIPTokenizer.from_pretrained(model_config.base, subfolder="tokenizer")
             text_encoder = CLIPTextModel.from_pretrained(model_config.base, subfolder="text_encoder")
-            vae          = AutoencoderKL.from_pretrained(model_config.vae, subfolder="vae")            
+            vae          = AutoencoderKL.from_pretrained(model_config.base, subfolder="vae")            
             unet         = UNet3DConditionModel.from_pretrained_2d(model_config.base, subfolder="unet", unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
+            vision_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda")
 
             if is_xformers_available(): unet.enable_xformers_memory_efficient_attention()
             else: assert False
 
             pipeline = AnimationPipeline(
-                vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, unet=unet,
+                vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, unet=unet,vision_encoder=vision_encoder,
                 scheduler=DDIMScheduler(**OmegaConf.to_container(inference_config.noise_scheduler_kwargs)),
             ).to("cuda")
 
@@ -160,9 +161,9 @@ def main(args):
                     motion_module_state_dict = new_loaded_state_dict
 
                     # Element-wise addition of the weights from converted_unet_checkpoint to the motion_module_state_dict
-                    for key in motion_module_state_dict:
-                        if key in converted_unet_checkpoint:
-                            motion_module_state_dict[key] += converted_unet_checkpoint[key]
+                    #for key in motion_module_state_dict:
+                    #    if key in converted_unet_checkpoint:
+                    #        motion_module_state_dict[key] += converted_unet_checkpoint[key]
 
                     if "global_step" in motion_module_state_dict: 
                         func_args.update({"global_step": motion_module_state_dict["global_step"]})
@@ -186,30 +187,29 @@ def main(args):
                     random_seeds = random_seeds * len(prompts) if len(random_seeds) == 1 else random_seeds
                     config[config_key].random_seed = []
 
-                    input_image_tensor = load_image_to_tensor(args.image_path, target_size=(args.W, args.H))
+                    input_image_tensor = load_image_to_tensor(args.image_path, target_size=(args.W, args.H)).cuda()
                     video_length = args.L
-                    input_image_tensor = input_image_tensor.repeat(video_length, 1, 1, 1).cuda()  # Repeat the image tensor for all frames, also move it to GPU
-                    masks = torch.ones(1,video_length, 1, args.H, args.W, device='cuda')  # Expanded the mask shape to match the latent's
-                    masks[:, 0, 0] = 0
+                    #input_image_tensor = input_image_tensor.repeat(video_length, 1, 1, 1).cuda()  # Repeat the image tensor for all frames, also move it to GPU
+                    #masks = torch.ones(1,video_length, 1, args.H, args.W, device='cuda')  # Expanded the mask shape to match the latent's
+                   # masks[:, 0, 0] = 0
                     print(f"input image tensor shape: {input_image_tensor.shape}")
                     with torch.no_grad():
-                        pixel_values = rearrange(input_image_tensor, "f c h w -> (f) c h w")
-                        latents = vae.encode(pixel_values).latent_dist
-                        latents = latents.sample()
-                        latents = rearrange(latents, "(f) c h w -> c f h w", f=video_length)
+                        #pixel_values = rearrange(input_image_tensor, "f c h w -> (f) c h w")
+                        #latents = vae.encode(pixel_values).latent_dist
+                        #latents = latents.sample()
+                        #latents = rearrange(latents, "(f) c h w -> c f h w", f=video_length)
                     
                         # Generate the masked pixel values and latents
                         
-                        first_frame = input_image_tensor.unsqueeze(0)
+                        #first_frame = input_image_tensor.unsqueeze(0)
+                        first_frame = input_image_tensor / 2. + 0.5
                         print(f"first frame shape {first_frame.shape}")
-                        masked_latents = vae.encode(rearrange(first_frame, "b f c h w -> (b f) c h w")).latent_dist
-                        masked_latents = masked_latents.sample()
-                        masked_latents = rearrange(masked_latents, "(b f) c h w -> b c f h w", f=video_length)
+                       
                        # masked_latents = masked_latents.unsqueeze(0)
                     for prompt_idx, (prompt, n_prompt, random_seed) in enumerate(zip(prompts, n_prompts, random_seeds)):
                         generator.manual_seed(random_seed)    
                         config[config_key].random_seed.append(random_seed)
-                        print(f"latents shape: {latents.shape}")
+                        #print(f"latents shape: {latents.shape}")
                         
                         # Using the pipeline
                         sample = pipeline(
@@ -218,9 +218,7 @@ def main(args):
                             width=args.W,
                             height=args.H,
                             video_length=args.L,
-                            latents=None,
-                            masks=masks,
-                            masked_latents=masked_latents   # Passing the masked latents
+                            init_image=first_frame,
                         ).videos
 
                         # Saving the Sample
@@ -238,7 +236,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inference_config",      type=str, default="configs/inference/inference-v1.yaml")    
+    parser.add_argument("--inference_config",      type=str, default="configs/inference/inference-init.yml")    
     parser.add_argument("--image_path",            type=str, default="videos/input.mp4")
     parser.add_argument("--config",                type=str, required=True)
     
